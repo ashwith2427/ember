@@ -1,3 +1,4 @@
 #!/bin/bash
+set +xe
 
-cmake --build build
+clang -g -MMD -MP -MF main.d -o main main.c -lm
