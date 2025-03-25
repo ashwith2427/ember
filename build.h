@@ -185,12 +185,10 @@ File Handling
 ---------------------------------------
 */
 
-typedef enum { FORCE = 0, REGULAR = 1 } RmFlag;
-
-bool create_directory(const char *path);
+void create_directory(const char *name, const char *path);
 
 // Deletes the directory or a file.
-bool delete_directory(const char *path, RmFlag flag);
+void delete_directory(const char *path);
 /* If flag is REGULAR then it will only delete empty directories
 without content. If you have the content you will encounter an error. The
    error is same as in linux
@@ -199,8 +197,9 @@ without content. If you have the content you will encounter an error. The
 // Gets the current working directory.
 char *get_current_directory();
 
-bool delete_file(const char *path, const char *file_name);
-bool find_file(const char *path, const char *file_name);
+void change_directory(const char *path);
+
+void delete_file(const char *path);
 
 /*
 ---------------------------------------
@@ -582,6 +581,69 @@ void __iter_del(map_iterator *self) {
 File Handling
 ---------------------------------------
 */
+
+void create_directory(const char *name, const char *path) {
+    char new_path[1024];
+    snprintf(new_path, sizeof(new_path), "%s/%s", path, name);
+    if (mkdir(new_path, 0700) < 0 && errno == EEXIST) {
+        PRINT_INFO("Directory already exists.");
+    }
+}
+
+char *get_current_directory() {
+    char* buf = malloc(1024);
+    getcwd(buf, 1024);
+    return buf;
+}
+
+void change_directory(const char *path) {
+    if (chdir(path) != 0) {
+        switch(errno){
+            case ENOENT: PRINT_ERROR("No such file or directory.");break;
+            default: PRINT_ERROR("Unable to change dir.");break;
+        }
+    }
+}
+
+void delete_directory(const char *path){
+    if(strcmp(path, ".") == 0 || strcmp(path, "..") == 0){
+        PRINT_INFO("You are either deleting project directory or parent dir. Check once.");
+        return;
+    }
+    struct dirent *entry;
+    DIR* directory = opendir(path);
+    if(directory == NULL){
+        PRINT_ERROR("Directory is invalid.");
+        abort();
+    }
+    char full_path[1024];
+    while((entry = readdir(directory)) != NULL){
+        if(strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0){
+            continue;
+        }
+        snprintf(full_path, 1024, "%s/%s", path, entry->d_name);
+        if(entry->d_type == DT_REG){
+            remove(full_path);
+        }else if(entry->d_type == DT_DIR){
+            delete_directory(full_path);
+        }
+    }
+    closedir(directory);
+    if(rmdir(path) != 0){
+        PRINT_ERROR("Failed to remove directory.");
+        abort();
+    }
+}
+
+void delete_file(const char *path){
+    if(remove(path) != 0){
+        switch(errno){
+            case EISDIR: PRINT_ERROR("Not a file. It is a directory.");break;
+            case ENOENT: PRINT_ERROR("No such file or directory.");break;
+            default: PRINT_ERROR("Unable to delete file.");
+        }
+    }
+}
 
 /*
 ---------------------------------------
