@@ -2,7 +2,7 @@
 #define BUILD_H_
 
 #include <bits/types.h>
-#include <cstdint>
+#include <errno.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -185,6 +185,13 @@ File Handling
 ---------------------------------------
 */
 
+typedef struct DirectoryInfo {
+    uint32_t sources_len;
+    uint32_t headers_len;
+    Array *sources;
+    Array *headers;
+} DirectoryInfo;
+
 void create_directory(const char *name, const char *path);
 
 // Deletes the directory or a file.
@@ -200,6 +207,9 @@ char *get_current_directory();
 void change_directory(const char *path);
 
 void delete_file(const char *path);
+
+DirectoryInfo *scan_directory(const char *path);
+void free_directory_info(DirectoryInfo *info);
 
 /*
 ---------------------------------------
@@ -264,7 +274,7 @@ typedef struct Executable {
     const char *version;
     const char *output_dir;
     Optimization opts;
-    void (*link_libraries)(Executable *exe, Library *library);
+    void (*link_libraries)(struct Executable *exe, Library *library);
 } Executable;
 
 Executable *init_executable(const char *name, const char *root_source_path,
@@ -281,7 +291,7 @@ typedef struct Builder {
     bool emit_dependency_graph;
     Library *(*generate_library)(const char *name, const char *path);
     void (*add_executable)(Executable *exe);
-    void (*install)(Builder *self);
+    void (*install)(struct Builder *self);
     void (*run)();
 } Builder;
 
@@ -294,21 +304,6 @@ void __run__impl();
 /*
 ---------------------------------------
 */
-
-/*
----------------------------------------
-Compilation
----------------------------------------
-*/
-
-typedef struct {
-    Array *sources;
-    Array *headers;
-} DirectoryInfo;
-
-DirectoryInfo *init_directory_info();
-DirectoryInfo *scan_directory();
-void generate_dependencies(const char *path);
 
 #endif // BUILD_H_
 
@@ -345,17 +340,25 @@ void *get_element(Array *array, int i) {
     return (char *)array->data + (array->element_size * i);
 }
 
-int get_size(Array *array) { return array->size; }
-
 void push(Array *array, void *element) {
     if (array->size >= array->capacity) {
-        int previous_cap = array->capacity;
         array->capacity *= 2;
-        array->data =
+        void *new_data =
             realloc(array->data, array->capacity * array->element_size);
+        if (!new_data) {
+            PRINT_ERROR("Memory reallocation failed");
+            exit(EXIT_FAILURE);
+        }
+        array->data = new_data;
     }
-    memcpy((char *)array->data + array->size * array->element_size, element,
-           array->element_size);
+    if (array->element_size == sizeof(char *)) {
+        char *copy = strdup((char *)element);
+        memcpy((char **)array->data + array->size, &copy, sizeof(char *));
+    } else {
+        memcpy((char *)array->data + array->size * array->element_size, element,
+               array->element_size);
+    }
+
     array->size++;
 }
 
@@ -591,58 +594,119 @@ void create_directory(const char *name, const char *path) {
 }
 
 char *get_current_directory() {
-    char* buf = malloc(1024);
+    char *buf = malloc(1024);
     getcwd(buf, 1024);
     return buf;
 }
 
 void change_directory(const char *path) {
     if (chdir(path) != 0) {
-        switch(errno){
-            case ENOENT: PRINT_ERROR("No such file or directory.");break;
-            default: PRINT_ERROR("Unable to change dir.");break;
+        switch (errno) {
+        case ENOENT:
+            PRINT_ERROR("No such file or directory.");
+            break;
+        default:
+            PRINT_ERROR("Unable to change dir.");
+            break;
         }
     }
 }
 
-void delete_directory(const char *path){
-    if(strcmp(path, ".") == 0 || strcmp(path, "..") == 0){
-        PRINT_INFO("You are either deleting project directory or parent dir. Check once.");
+void delete_directory(const char *path) {
+    if (strcmp(path, ".") == 0 || strcmp(path, "..") == 0) {
+        PRINT_INFO("You are either deleting project directory or parent dir. "
+                   "Check once.");
         return;
     }
     struct dirent *entry;
-    DIR* directory = opendir(path);
-    if(directory == NULL){
+    DIR *directory = opendir(path);
+    if (directory == NULL) {
         PRINT_ERROR("Directory is invalid.");
         abort();
     }
     char full_path[1024];
-    while((entry = readdir(directory)) != NULL){
-        if(strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0){
+    while ((entry = readdir(directory)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 ||
+            strcmp(entry->d_name, "..") == 0) {
             continue;
         }
         snprintf(full_path, 1024, "%s/%s", path, entry->d_name);
-        if(entry->d_type == DT_REG){
+        if (entry->d_type == DT_REG) {
             remove(full_path);
-        }else if(entry->d_type == DT_DIR){
+        } else if (entry->d_type == DT_DIR) {
             delete_directory(full_path);
         }
     }
     closedir(directory);
-    if(rmdir(path) != 0){
+    if (rmdir(path) != 0) {
         PRINT_ERROR("Failed to remove directory.");
         abort();
     }
 }
 
-void delete_file(const char *path){
-    if(remove(path) != 0){
-        switch(errno){
-            case EISDIR: PRINT_ERROR("Not a file. It is a directory.");break;
-            case ENOENT: PRINT_ERROR("No such file or directory.");break;
-            default: PRINT_ERROR("Unable to delete file.");
+void delete_file(const char *path) {
+    if (remove(path) != 0) {
+        switch (errno) {
+        case EISDIR:
+            PRINT_ERROR("Not a file. It is a directory.");
+            break;
+        case ENOENT:
+            PRINT_ERROR("No such file or directory.");
+            break;
+        default:
+            PRINT_ERROR("Unable to delete file.");
         }
     }
+}
+
+DirectoryInfo *scan_directory(const char *path) {
+    DirectoryInfo *info = (DirectoryInfo *)malloc(sizeof(*info));
+    info->headers = init_array(sizeof(char *));
+    info->sources = init_array(sizeof(char *));
+    info->sources_len = 0;
+    info->headers_len = 0;
+    struct dirent *entry;
+    DIR *directory = opendir(path);
+    if (directory == NULL) {
+        switch (errno) {
+        case ENOENT:
+            PRINT_ERROR("No such file or directory.");
+            break;
+        case ENOTDIR:
+            PRINT_ERROR("Not a directory.");
+            break;
+        default:
+            PRINT_ERROR("Recheck the directory.");
+        }
+    }
+
+    while ((entry = readdir(directory)) != NULL) {
+        char *extension;
+        if (strcmp(entry->d_name, "..") == 0 || strcmp(entry->d_name, ".") == 0)
+            continue;
+        if (entry->d_type == DT_REG) {
+            char *dot = strrchr(entry->d_name, '.');
+            if (dot && dot != entry->d_name) {
+                extension = dot + 1;
+            }
+        }
+        if (extension && strcmp(extension, "h") == 0) {
+            push(info->headers, entry->d_name);
+            info->headers_len++;
+        }
+        if (extension && strcmp(extension, "c") == 0) {
+            push(info->sources, entry->d_name);
+            info->sources_len++;
+        }
+    }
+    closedir(directory);
+    return info;
+}
+
+void free_directory_info(DirectoryInfo *info) {
+    free_array(info->headers);
+    free_array(info->sources);
+    free(info);
 }
 
 /*
