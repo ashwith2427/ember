@@ -3,6 +3,7 @@
 
 #include <bits/types.h>
 #include <errno.h>
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -34,7 +35,8 @@ Simple Logger
 #define PRINT_ERROR(message)                                                   \
     SET_RED();                                                                 \
     fprintf(stderr, "[ERROR]: %s\n", message);                                 \
-    RESET_COLOR();
+    RESET_COLOR();                                                             \
+    abort();                                                                   \
 
 #define PRINT_INFO(message)                                                    \
     SET_YELLOW();                                                              \
@@ -42,6 +44,19 @@ Simple Logger
     RESET_COLOR();
 
 #define TODO(message) fprintf(stderr, "[TODO]: %s", message);
+
+/*
+---------------------------------------
+*/
+
+/*
+---------------------------------------
+Strings
+---------------------------------------
+*/
+
+char *string_stream(const char *fmt, ...);
+char *get_extension(const char *path);
 
 /*
 ---------------------------------------
@@ -62,6 +77,7 @@ Arrays
             char *: push(arr, (void *)&temp),                                  \
             default: push(arr, temp));                                         \
     } while (0)
+
 
 typedef struct FileInfo {
     const char *file_name;
@@ -186,8 +202,6 @@ File Handling
 */
 
 typedef struct DirectoryInfo {
-    uint32_t sources_len;
-    uint32_t headers_len;
     Array *sources;
     Array *headers;
 } DirectoryInfo;
@@ -258,15 +272,16 @@ typedef enum Architecture {
 } Architecture;
 
 typedef struct Library {
-    char *name;
-    char *path;
+    const char *name;
+    const char *path;
     Array *sources;
     Array *headers;
     bool is_shared;
-    void (*link_library)(struct Library *library);
+    void (*link_library)(struct Library *self, const char* path);
 } Library;
-Library *init_library__impl(const char *name, const char *path, bool is_shared);
-void __llink_library__impl(struct Library *library);
+Library *init_library(const char *name, const char *path, bool shared);
+void free_library(Library *library);
+void __llink_library__impl(Library* self, const char* path);
 
 typedef struct Executable {
     char *name;
@@ -274,12 +289,13 @@ typedef struct Executable {
     const char *version;
     const char *output_dir;
     Optimization opts;
-    void (*link_libraries)(struct Executable *exe, Library *library);
+    void (*link_libraries)(struct Executable *exe, const char* path);
 } Executable;
 
 Executable *init_executable(const char *name, const char *root_source_path,
                             Optimization opts);
-void __elink_libraries__impl(Executable *exe, Library *library);
+void free_executable(Executable *executable);
+void __elink_libraries__impl(Executable *exe, const char* file_name);
 
 typedef struct Builder {
     Executable *exe;
@@ -289,14 +305,15 @@ typedef struct Builder {
     Architecture arch;
     bool emit_assembly;
     bool emit_dependency_graph;
-    Library *(*generate_library)(const char *name, const char *path);
+    void (*generate_library)(Library *lib);
     void (*add_executable)(Executable *exe);
     void (*install)(struct Builder *self);
     void (*run)();
 } Builder;
 
 Builder *init_builder();
-Library *__generate_library__impl(const char *name, const char *path);
+void free_builder(Builder *builder);
+void __generate_library__impl(Library *lib);
 void __add_executable__impl(Executable *exe);
 void __install__impl(Builder *self);
 void __run__impl();
@@ -309,6 +326,36 @@ void __run__impl();
 
 #ifdef BUILD_IMPLEMENTATION
 #define BUILD_IMPLEMENTATION
+
+/*
+---------------------------------------
+Strings
+---------------------------------------
+*/
+char *string_stream(const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    int size = vsnprintf(NULL, 0, fmt, args);
+    va_end(args);
+    if(size<0) return NULL;
+    char *buffer = malloc(size + 1);
+    va_start(args, fmt);
+    vsnprintf(buffer, size+1, fmt, args);
+    va_end(args);
+    return buffer;
+}
+
+char *get_extension(const char *path) {
+    char *extension;
+    char *dot = strrchr(path, '.');
+    if (dot && dot != path) {
+        extension = dot + 1;
+    }
+    return extension;
+}
+/*
+---------------------------------------
+*/
 
 /*
 ---------------------------------------
@@ -328,6 +375,11 @@ Array *init_array(int element_size) {
 void free_array(Array *array) {
     if (!array)
         return;        // Safety check
+    if(array->element_size == sizeof(char*)){
+        for(int i=0;i<array->size;i++){
+            free(((char**)array->data)[i]);
+        }
+    }
     free(array->data); // Free the array storage
     free(array);       // Free the array struct itself
 }
@@ -335,7 +387,6 @@ void free_array(Array *array) {
 void *get_element(Array *array, int i) {
     if (array == NULL || array->data == NULL || i >= array->size) {
         PRINT_ERROR("Invalid array or array data pointer.");
-        abort();
     }
     return (char *)array->data + (array->element_size * i);
 }
@@ -347,7 +398,6 @@ void push(Array *array, void *element) {
             realloc(array->data, array->capacity * array->element_size);
         if (!new_data) {
             PRINT_ERROR("Memory reallocation failed");
-            exit(EXIT_FAILURE);
         }
         array->data = new_data;
     }
@@ -387,7 +437,6 @@ Array *read_file_to_array(const char *file_name, int element_size) {
     FILE *file = fopen(file_name, "r");
     if (file == NULL) {
         PRINT_ERROR("Error reading from the file or opening the file...");
-        return NULL;
     }
 
     // Read the size of the file
@@ -413,6 +462,8 @@ Array *read_file_to_array(const char *file_name, int element_size) {
     fclose(file);
     return file_infos;
 }
+
+int get_size(Array *array) { return array->size; }
 
 void print_array(Array *array, void (*print_fn)(void *)) {
     for (int i = 0; i < array->size; i++) {
@@ -589,7 +640,7 @@ void create_directory(const char *name, const char *path) {
     char new_path[1024];
     snprintf(new_path, sizeof(new_path), "%s/%s", path, name);
     if (mkdir(new_path, 0700) < 0 && errno == EEXIST) {
-        PRINT_INFO("Directory already exists.");
+        return;
     }
 }
 
@@ -622,7 +673,6 @@ void delete_directory(const char *path) {
     DIR *directory = opendir(path);
     if (directory == NULL) {
         PRINT_ERROR("Directory is invalid.");
-        abort();
     }
     char full_path[1024];
     while ((entry = readdir(directory)) != NULL) {
@@ -640,7 +690,6 @@ void delete_directory(const char *path) {
     closedir(directory);
     if (rmdir(path) != 0) {
         PRINT_ERROR("Failed to remove directory.");
-        abort();
     }
 }
 
@@ -663,8 +712,6 @@ DirectoryInfo *scan_directory(const char *path) {
     DirectoryInfo *info = (DirectoryInfo *)malloc(sizeof(*info));
     info->headers = init_array(sizeof(char *));
     info->sources = init_array(sizeof(char *));
-    info->sources_len = 0;
-    info->headers_len = 0;
     struct dirent *entry;
     DIR *directory = opendir(path);
     if (directory == NULL) {
@@ -679,24 +726,19 @@ DirectoryInfo *scan_directory(const char *path) {
             PRINT_ERROR("Recheck the directory.");
         }
     }
-
     while ((entry = readdir(directory)) != NULL) {
-        char *extension;
         if (strcmp(entry->d_name, "..") == 0 || strcmp(entry->d_name, ".") == 0)
             continue;
         if (entry->d_type == DT_REG) {
-            char *dot = strrchr(entry->d_name, '.');
-            if (dot && dot != entry->d_name) {
-                extension = dot + 1;
+            char *extension = get_extension(entry->d_name);
+            char* full_path = string_stream("%s/%s", path, entry->d_name);
+            if (extension && strcmp(extension, "h") == 0) {
+                push(info->headers, full_path);
             }
-        }
-        if (extension && strcmp(extension, "h") == 0) {
-            push(info->headers, entry->d_name);
-            info->headers_len++;
-        }
-        if (extension && strcmp(extension, "c") == 0) {
-            push(info->sources, entry->d_name);
-            info->sources_len++;
+            if (extension && strcmp(extension, "c") == 0) {
+                push(info->sources, full_path);
+            }
+            free(full_path);
         }
     }
     closedir(directory);
@@ -707,6 +749,70 @@ void free_directory_info(DirectoryInfo *info) {
     free_array(info->headers);
     free_array(info->sources);
     free(info);
+}
+
+/*
+---------------------------------------
+*/
+
+/*
+---------------------------------------
+Actual Build System
+---------------------------------------
+*/
+
+Library *init_library(const char *name, const char *path, bool shared) {
+    Library *lib = (Library *)malloc(sizeof(*lib));
+    lib->is_shared = shared;
+    lib->link_library = __llink_library__impl;
+    lib->name = name;
+    lib->path = path;
+    DirectoryInfo *info = scan_directory(path);
+    lib->headers = info->headers;
+    lib->sources = info->sources;
+    free(info);
+    return lib;
+}
+
+void free_library(Library *library) {
+    free_array(library->headers);
+    free_array(library->sources);
+    free(library);
+}
+
+void __generate_library__impl(Library *lib){
+    char* outputs_path = string_stream("build/%s_libs", lib->name);
+    char* shared_lib_command = string_stream("clang -shared -o build/%s.so ", lib->name);
+    struct dirent* entry;
+    DIR* directory = opendir(outputs_path);
+    if(directory == NULL){
+        if(errno == ENOENT){
+            PRINT_ERROR("No such directory.");
+        }else{
+            PRINT_ERROR("Directory cannot be opened.");
+        }
+    }
+
+    while((entry = readdir(directory)) != NULL){
+        if(strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0){
+            continue;
+        }
+        if(entry->d_type == DT_REG){
+            char* full_path = string_stream("%s/%s", outputs_path, entry->d_name);
+            char* extension = get_extension(full_path);
+            size_t new_size = strlen(full_path) + strlen(shared_lib_command) + 2;
+            shared_lib_command = realloc(shared_lib_command, new_size);
+            if(extension && strcmp("o", extension) == 0){
+                strcat(shared_lib_command, full_path);
+                strcat(shared_lib_command, " ");
+            }
+            free(full_path);
+        }
+    }
+    system(shared_lib_command);
+    free(outputs_path);
+    free(shared_lib_command);
+    closedir(directory);
 }
 
 /*
