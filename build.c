@@ -1,10 +1,6 @@
 #define BUILD_IMPLEMENTATION
 #include "build.h"
 
-void print_strings(void* data){
-    printf("%s\n", *(char**)data);
-}
-
 int main() {
     Builder* builder = init_builder();
     Executable* exe = init_executable("main", "main.c", OPTIMIZATION_NONE);
