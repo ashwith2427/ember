@@ -36,7 +36,7 @@ Simple Logger
     SET_RED();                                                                 \
     fprintf(stderr, "[ERROR]: %s\n", message);                                 \
     RESET_COLOR();                                                             \
-    abort();                                                                   \
+    abort();
 
 #define PRINT_INFO(message)                                                    \
     SET_YELLOW();                                                              \
@@ -78,7 +78,6 @@ Arrays
             default: push(arr, temp));                                         \
     } while (0)
 
-
 typedef struct FileInfo {
     const char *file_name;
     const char *hash_code;
@@ -101,6 +100,7 @@ bool find(Array *array, void *element);
 int get_size(Array *array);
 void resize_array(Array *array, size_t size);
 void print_array(Array *array, void (*print_fn)(void *));
+void merge_arrays(Array *dest, Array *src);
 
 /*
 ---------------------------------------
@@ -219,6 +219,7 @@ without content. If you have the content you will encounter an error. The
 char *get_current_directory();
 
 void change_directory(const char *path);
+char* capture_end_file(const char* path);
 
 void delete_file(const char *path);
 
@@ -277,46 +278,54 @@ typedef struct Library {
     Array *sources;
     Array *headers;
     bool is_shared;
-    void (*link_library)(struct Library *self, const char* path);
 } Library;
 Library *init_library(const char *name, const char *path, bool shared);
 void free_library(Library *library);
-void __llink_library__impl(Library* self, const char* path);
 
 typedef struct Executable {
-    char *name;
-    char *root_source_path;
-    const char *version;
+    const char *name;
+    const char *root_source_path;
     const char *output_dir;
     Optimization opts;
-    void (*link_libraries)(struct Executable *exe, const char* path);
 } Executable;
 
 Executable *init_executable(const char *name, const char *root_source_path,
                             Optimization opts);
 void free_executable(Executable *executable);
-void __elink_libraries__impl(Executable *exe, const char* file_name);
 
 typedef struct Builder {
     Executable *exe;
-    const char *output_dir;
+    char *command;
     Array *libraries;
     Compiler compiler;
     Architecture arch;
     bool emit_assembly;
     bool emit_dependency_graph;
-    void (*generate_library)(Library *lib);
-    void (*add_executable)(Executable *exe);
+    void (*generate_library)(struct Builder *builder, Library *lib);
+    void (*add_executable)(struct Builder *builder, Executable *exe);
     void (*install)(struct Builder *self);
-    void (*run)();
+    void (*link_library)(struct Builder *builder, Library *library);
 } Builder;
 
 Builder *init_builder();
 void free_builder(Builder *builder);
-void __generate_library__impl(Library *lib);
-void __add_executable__impl(Executable *exe);
+void __generate_library__impl(Builder *self, Library *lib);
+void __elink_libraries__impl(Builder *self, Library *library);
+void __add_executable__impl(Builder *self, Executable *exe);
 void __install__impl(Builder *self);
-void __run__impl();
+
+static void __generate_outputs(const char *name) {
+    char *outputs_path = string_stream("build/%s_libs", name);
+    create_directory(outputs_path, ".");
+    DirectoryInfo *info = scan_directory(name);
+    for (int i = 0; i < get_size(info->sources); i++) {
+        char *file_name = *(char **)get_element(info->sources, i);
+        char *endfile = capture_end_file(file_name);
+        char *command = string_stream("clang -c %s -o %s/%s.o", file_name,
+                                      outputs_path, endfile);
+        system(command);
+    }
+}
 
 /*
 ---------------------------------------
@@ -337,10 +346,11 @@ char *string_stream(const char *fmt, ...) {
     va_start(args, fmt);
     int size = vsnprintf(NULL, 0, fmt, args);
     va_end(args);
-    if(size<0) return NULL;
+    if (size < 0)
+        return NULL;
     char *buffer = malloc(size + 1);
     va_start(args, fmt);
-    vsnprintf(buffer, size+1, fmt, args);
+    vsnprintf(buffer, size + 1, fmt, args);
     va_end(args);
     return buffer;
 }
@@ -374,10 +384,10 @@ Array *init_array(int element_size) {
 
 void free_array(Array *array) {
     if (!array)
-        return;        // Safety check
-    if(array->element_size == sizeof(char*)){
-        for(int i=0;i<array->size;i++){
-            free(((char**)array->data)[i]);
+        return; // Safety check
+    if (array->element_size == sizeof(char *)) {
+        for (int i = 0; i < array->size; i++) {
+            free(((char **)array->data)[i]);
         }
     }
     free(array->data); // Free the array storage
@@ -469,6 +479,27 @@ void print_array(Array *array, void (*print_fn)(void *)) {
     for (int i = 0; i < array->size; i++) {
         print_fn((char *)array->data + i * array->element_size);
     }
+}
+
+void merge_arrays(Array *dest, Array *src) {
+    if (src->element_size != dest->element_size) {
+        PRINT_ERROR("Elements size mismatch cant merge arrays of two different "
+                    "element types");
+    }
+    if (src->size == 0)
+        return;
+
+    size_t new_capacity = dest->size + src->size;
+
+    if (dest->capacity < new_capacity) {
+        dest->capacity = new_capacity * 2;
+        dest->data = realloc(dest->data, dest->capacity * dest->element_size);
+    }
+
+    memcpy((char *)dest->data + (dest->size * dest->element_size), src->data,
+           src->size * src->element_size);
+
+    dest->size += src->size;
 }
 
 /*
@@ -693,6 +724,15 @@ void delete_directory(const char *path) {
     }
 }
 
+char* capture_end_file(const char* path){
+    char *name;
+    char *slash = strrchr(path, '/');
+    if (slash && slash != path) {
+        name = slash + 1;
+    }
+    return name;
+}
+
 void delete_file(const char *path) {
     if (remove(path) != 0) {
         switch (errno) {
@@ -729,17 +769,21 @@ DirectoryInfo *scan_directory(const char *path) {
     while ((entry = readdir(directory)) != NULL) {
         if (strcmp(entry->d_name, "..") == 0 || strcmp(entry->d_name, ".") == 0)
             continue;
+        char *full_path = string_stream("%s/%s", path, entry->d_name);
         if (entry->d_type == DT_REG) {
             char *extension = get_extension(entry->d_name);
-            char* full_path = string_stream("%s/%s", path, entry->d_name);
             if (extension && strcmp(extension, "h") == 0) {
                 push(info->headers, full_path);
             }
             if (extension && strcmp(extension, "c") == 0) {
                 push(info->sources, full_path);
             }
-            free(full_path);
+        } else if (entry->d_type == DT_DIR) {
+            DirectoryInfo *sub_info = scan_directory(full_path);
+            merge_arrays(info->headers, sub_info->headers);
+            merge_arrays(info->sources, sub_info->sources);
         }
+        free(full_path);
     }
     closedir(directory);
     return info;
@@ -764,7 +808,6 @@ Actual Build System
 Library *init_library(const char *name, const char *path, bool shared) {
     Library *lib = (Library *)malloc(sizeof(*lib));
     lib->is_shared = shared;
-    lib->link_library = __llink_library__impl;
     lib->name = name;
     lib->path = path;
     DirectoryInfo *info = scan_directory(path);
@@ -780,29 +823,34 @@ void free_library(Library *library) {
     free(library);
 }
 
-void __generate_library__impl(Library *lib){
-    char* outputs_path = string_stream("build/%s_libs", lib->name);
-    char* shared_lib_command = string_stream("clang -shared -o build/%s.so ", lib->name);
-    struct dirent* entry;
-    DIR* directory = opendir(outputs_path);
-    if(directory == NULL){
-        if(errno == ENOENT){
+void __generate_library__impl(Builder *self, Library *lib) {
+    __generate_outputs(lib->name);
+    char *outputs_path = string_stream("build/%s_libs", lib->name);
+    char *shared_lib_command =
+        string_stream("clang -shared -o build/lib%s.so ", lib->name);
+    struct dirent *entry;
+    DIR *directory = opendir(outputs_path);
+    if (directory == NULL) {
+        if (errno == ENOENT) {
             PRINT_ERROR("No such directory.");
-        }else{
+        } else {
             PRINT_ERROR("Directory cannot be opened.");
         }
     }
 
-    while((entry = readdir(directory)) != NULL){
-        if(strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0){
+    while ((entry = readdir(directory)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 ||
+            strcmp(entry->d_name, "..") == 0) {
             continue;
         }
-        if(entry->d_type == DT_REG){
-            char* full_path = string_stream("%s/%s", outputs_path, entry->d_name);
-            char* extension = get_extension(full_path);
-            size_t new_size = strlen(full_path) + strlen(shared_lib_command) + 2;
+        if (entry->d_type == DT_REG) {
+            char *full_path =
+                string_stream("%s/%s", outputs_path, entry->d_name);
+            char *extension = get_extension(full_path);
+            size_t new_size =
+                strlen(full_path) + strlen(shared_lib_command) + 2;
             shared_lib_command = realloc(shared_lib_command, new_size);
-            if(extension && strcmp("o", extension) == 0){
+            if (extension && strcmp("o", extension) == 0) {
                 strcat(shared_lib_command, full_path);
                 strcat(shared_lib_command, " ");
             }
@@ -813,6 +861,58 @@ void __generate_library__impl(Library *lib){
     free(outputs_path);
     free(shared_lib_command);
     closedir(directory);
+}
+
+Executable *init_executable(const char *name, const char *root_source_path,
+                            Optimization opts) {
+    Executable *executable = (Executable *)malloc(sizeof(*executable));
+    executable->opts = opts;
+    executable->root_source_path = root_source_path;
+    executable->name = name;
+    executable->output_dir = "build";
+    return executable;
+}
+
+void free_executable(Executable *executable) { free(executable); }
+
+Builder *init_builder() {
+    Builder *builder = (Builder *)malloc(sizeof(*builder));
+    builder->libraries = init_array(sizeof(Library *));
+    builder->generate_library = __generate_library__impl;
+    builder->link_library = __elink_libraries__impl;
+    builder->add_executable = __add_executable__impl;
+    builder->arch = X86;
+    builder->compiler = CLANG;
+    builder->emit_assembly = false;
+    builder->emit_dependency_graph = false;
+    builder->exe = NULL;
+    builder->install = __install__impl;
+    return builder;
+}
+
+void __add_executable__impl(Builder *self, Executable *exe) {
+    self->exe = exe;
+    self->command = string_stream("clang -o build/%s %s ", exe->name,
+                                  exe->root_source_path);
+}
+
+void __elink_libraries__impl(Builder *self, Library* library) {
+    char *lib_path = string_stream("build/lib%s.so", library->name);
+    int new_size = strlen(self->command) + strlen(lib_path) + 2;
+    self->command = realloc(self->command, new_size);
+    strcat(self->command, lib_path);
+    free(lib_path);
+}
+
+void __install__impl(Builder *self) {
+    create_directory("build", ".");
+    system(self->command);
+}
+
+void free_builder(Builder *builder) {
+    free(builder->command);
+    free_array(builder->libraries);
+    free(builder);
 }
 
 /*
