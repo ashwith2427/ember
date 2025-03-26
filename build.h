@@ -324,7 +324,10 @@ static void __generate_outputs(const char *name) {
         char *command = string_stream("clang -c %s -o %s/%s.o", file_name,
                                       outputs_path, endfile);
         system(command);
+        free(command);
     }
+    free(outputs_path);
+    free_directory_info(info);
 }
 
 /*
@@ -782,6 +785,7 @@ DirectoryInfo *scan_directory(const char *path) {
             DirectoryInfo *sub_info = scan_directory(full_path);
             merge_arrays(info->headers, sub_info->headers);
             merge_arrays(info->sources, sub_info->sources);
+            free_directory_info(sub_info);
         }
         free(full_path);
     }
