@@ -219,7 +219,7 @@ without content. If you have the content you will encounter an error. The
 char *get_current_directory();
 
 void change_directory(const char *path);
-char* capture_end_file(const char* path);
+char *capture_end_file(const char *path);
 
 void delete_file(const char *path);
 
@@ -485,25 +485,39 @@ void print_array(Array *array, void (*print_fn)(void *)) {
 }
 
 void merge_arrays(Array *dest, Array *src) {
+    if (!dest || !src) return;
+
     if (src->element_size != dest->element_size) {
-        PRINT_ERROR("Elements size mismatch cant merge arrays of two different "
-                    "element types");
-    }
-    if (src->size == 0)
+        PRINT_ERROR("Element size mismatch: Cannot merge arrays of different types");
         return;
+    }
+
+    if (src->size == 0) return;
 
     size_t new_capacity = dest->size + src->size;
 
     if (dest->capacity < new_capacity) {
         dest->capacity = new_capacity * 2;
-        dest->data = realloc(dest->data, dest->capacity * dest->element_size);
+        void *new_data = realloc(dest->data, dest->capacity * dest->element_size);
+        dest->data = new_data;
     }
 
-    memcpy((char *)dest->data + (dest->size * dest->element_size), src->data,
-           src->size * src->element_size);
+    if (dest->element_size == sizeof(char *)) {
+        char **dest_data = (char **)dest->data;
+        char **src_data = (char **)src->data;
+
+        for (size_t i = 0; i < src->size; i++) {
+            dest_data[dest->size + i] = strdup(src_data[i]); 
+        }
+    } else {
+        memcpy((char *)dest->data + (dest->size * dest->element_size), 
+               src->data, 
+               src->size * src->element_size);
+    }
 
     dest->size += src->size;
 }
+
 
 /*
 ---------------------------------------
@@ -727,7 +741,7 @@ void delete_directory(const char *path) {
     }
 }
 
-char* capture_end_file(const char* path){
+char *capture_end_file(const char *path) {
     char *name;
     char *slash = strrchr(path, '/');
     if (slash && slash != path) {
@@ -750,6 +764,8 @@ void delete_file(const char *path) {
         }
     }
 }
+
+void print_strings(void *data) { printf("%s\n", *(char **)data); }
 
 DirectoryInfo *scan_directory(const char *path) {
     DirectoryInfo *info = (DirectoryInfo *)malloc(sizeof(*info));
@@ -880,6 +896,7 @@ Executable *init_executable(const char *name, const char *root_source_path,
 void free_executable(Executable *executable) { free(executable); }
 
 Builder *init_builder() {
+    create_directory("build", ".");
     Builder *builder = (Builder *)malloc(sizeof(*builder));
     builder->libraries = init_array(sizeof(Library *));
     builder->generate_library = __generate_library__impl;
@@ -900,7 +917,7 @@ void __add_executable__impl(Builder *self, Executable *exe) {
                                   exe->root_source_path);
 }
 
-void __elink_libraries__impl(Builder *self, Library* library) {
+void __elink_libraries__impl(Builder *self, Library *library) {
     char *lib_path = string_stream("build/lib%s.so", library->name);
     int new_size = strlen(self->command) + strlen(lib_path) + 2;
     self->command = realloc(self->command, new_size);
