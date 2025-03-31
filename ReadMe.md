@@ -1,5 +1,8 @@
 # Ember
-![Ember](images/ember.png)
+<p align="center">
+  <img src="images/ember.png" alt="Ember">
+</p>
+
 
 A simple, header-only build system for C, written in C.
 
