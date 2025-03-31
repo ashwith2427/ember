@@ -31,7 +31,8 @@ int main() {
     free_builder(builder);
     
     return 0;
-}```
+}
+```
 
 ## Build
 To build the project, run:
