@@ -305,12 +305,14 @@ typedef struct Builder {
     void (*add_executable)(struct Builder *builder, Executable *exe);
     void (*install)(struct Builder *self);
     void (*link_library)(struct Builder *builder, Library *library);
+    void (*add_system_library)(struct Builder *builder, const char *name);
 } Builder;
 
 Builder *init_builder();
 void free_builder(Builder *builder);
 void __generate_library__impl(Builder *self, Library *lib);
 void __elink_libraries__impl(Builder *self, Library *library);
+void __add_system_library_impl(Builder *self, const char* path);
 void __add_executable__impl(Builder *self, Executable *exe);
 void __install__impl(Builder *self);
 
@@ -901,6 +903,7 @@ Builder *init_builder() {
     builder->libraries = init_array(sizeof(Library *));
     builder->generate_library = __generate_library__impl;
     builder->link_library = __elink_libraries__impl;
+    builder->add_system_library = __add_system_library_impl;
     builder->add_executable = __add_executable__impl;
     builder->arch = X86;
     builder->compiler = CLANG;
@@ -909,6 +912,14 @@ Builder *init_builder() {
     builder->exe = NULL;
     builder->install = __install__impl;
     return builder;
+}
+
+void __add_system_library_impl(Builder *self, const char *name){
+    char *lib_comm = string_stream(" -l%s", name);
+    int new_size = strlen(self->command) + strlen(lib_comm) + 2;
+    self->command = realloc(self->command, new_size);
+    strcat(self->command, lib_comm);
+    free(lib_comm);
 }
 
 void __add_executable__impl(Builder *self, Executable *exe) {

@@ -8,6 +8,7 @@ int main() {
     Library *library = init_library("test", "build", true);
     builder->generate_library(builder, library);
     builder->link_library(builder, library);
+    builder->add_system_library(builder, "vulkan");
     builder->install(builder);
     free_library(library);
     free_executable(exe);
