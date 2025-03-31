@@ -49,11 +49,11 @@ To run your project, execute:
 ```
 ## Features
 
-These are the long-run goals of this build system. If you want to contribute you can fork it, do some changes and make a PR.
+These are the long-term goals of this build system. If you’d like to contribute, you can fork the repository, make changes, and submit a pull request (PR).
 
 - [x] Compilation
 - [x] Linking System libraries
-- [x] Generating shared libraries from source, header directory
+- [x] Generating shared libraries from source (.c) and header (.h) files
 - [x] Linking shared libraries
 - [ ] Portability(Windows, Mac)
 - [ ] Dependency management
