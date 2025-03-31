@@ -55,7 +55,7 @@ These are the long-run goals of this build system. If you want to contribute you
 - [x] Linking System libraries
 - [x] Generating shared libraries from source, header directory
 - [x] Linking shared libraries
-- [] Portability(Windows, Mac)
-- [] Dependency management
-- [] Parallel compilation
-- [] External packages from network
+- [ ] Portability(Windows, Mac)
+- [ ] Dependency management
+- [ ] Parallel compilation
+- [ ] External packages from network
