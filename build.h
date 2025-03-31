@@ -2,6 +2,7 @@
 #define BUILD_H_
 
 #include <bits/types.h>
+#include <ctype.h>
 #include <errno.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -255,6 +256,12 @@ Actual Build System
    available using OR; OPTIMIZATION_MEMORY | OPTIMIZATION_SPEED => Will consider
    both mem and speed of the build.
 */
+typedef struct Dependency{
+    char *file;
+    Array *files;
+}Dependecy;
+void __generate_dependencies(const char* folder);
+
 typedef enum Optimization {
     OPTIMIZATION_NONE = 0 << 0,
     OPTIMIZATION_MEMORY = 1 << 0,
@@ -306,6 +313,7 @@ typedef struct Builder {
     void (*install)(struct Builder *self);
     void (*link_library)(struct Builder *builder, Library *library);
     void (*add_system_library)(struct Builder *builder, const char *name);
+    void (*add_source)(struct Builder *builder, const char* path);
 } Builder;
 
 Builder *init_builder();
@@ -313,23 +321,75 @@ void free_builder(Builder *builder);
 void __generate_library__impl(Builder *self, Library *lib);
 void __elink_libraries__impl(Builder *self, Library *library);
 void __add_system_library_impl(Builder *self, const char* path);
+void __add_source_impl(Builder *self, const char *path);
 void __add_executable__impl(Builder *self, Executable *exe);
 void __install__impl(Builder *self);
 
-static void __generate_outputs(const char *name) {
-    char *outputs_path = string_stream("build/%s_libs", name);
-    create_directory(outputs_path, ".");
-    DirectoryInfo *info = scan_directory(name);
+static void __generate_outputs(const char *name, const char *path) {
+    char *o_path = string_stream("build/%s_libs", name);
+    char *d_path = string_stream("build/%s_deps", name);
+    create_directory(o_path, ".");
+    create_directory(d_path, ".");
+    DirectoryInfo *info = scan_directory(path);
     for (int i = 0; i < get_size(info->sources); i++) {
         char *file_name = *(char **)get_element(info->sources, i);
         char *endfile = capture_end_file(file_name);
-        char *command = string_stream("clang -c %s -o %s/%s.o", file_name,
-                                      outputs_path, endfile);
+        char *compile = string_stream("Compiling %s", file_name);
+        PRINT_INFO(compile);
+        char *command = string_stream("clang -MMD -MF %s/%s.d -c %s -o %s/%s.o", d_path, endfile, file_name,
+                                      o_path, endfile);
         system(command);
+        free(compile);
         free(command);
     }
-    free(outputs_path);
+    free(o_path);
+    free(d_path);
     free_directory_info(info);
+}
+
+static void __trim_whitespace(char *str) {
+    char *end;
+    while (isspace((unsigned char)*str)) str++;
+    if (*str == 0) return;
+    end = str + strlen(str) - 1;
+    while (end > str && isspace((unsigned char)*end)) end--;
+    end[1] = '\0';
+}
+
+static Array *__parse_dependency_file(const char *filename) {
+    FILE *file = fopen(filename, "r");
+    if (!file) {
+        PRINT_ERROR("Failed to open .d file");
+    }
+
+    char line[1024];
+    char dependencies[4096] = {0};
+    int first_line = 1;
+
+    while (fgets(line, sizeof(line), file)) {
+        size_t len = strlen(line);
+        if (len > 0 && line[len - 1] == '\n') {
+            line[len - 1] = '\0';
+            len--;
+        }
+        if (len > 0 && line[len - 1] == '\\') {
+            line[len - 1] = ' ';
+            strcat(dependencies, line);
+            continue;
+        }
+
+        strcat(dependencies, line);
+    }
+    fclose(file);
+    Array* files = init_array(sizeof(char*));
+
+    char *token = strtok(dependencies, " :");
+    while (token) {
+        __trim_whitespace(token);
+        push(files, token);
+        token = strtok(NULL, " :");
+    }
+    return files;
 }
 
 /*
@@ -767,7 +827,7 @@ void delete_file(const char *path) {
     }
 }
 
-void print_strings(void *data) { printf("%s\n", *(char **)data); }
+void print_strings(void *data) { printf("%s\n", *(char**)data); }
 
 DirectoryInfo *scan_directory(const char *path) {
     DirectoryInfo *info = (DirectoryInfo *)malloc(sizeof(*info));
@@ -846,7 +906,7 @@ void free_library(Library *library) {
 }
 
 void __generate_library__impl(Builder *self, Library *lib) {
-    __generate_outputs(lib->name);
+    __generate_outputs(lib->name, lib->path);
     char *outputs_path = string_stream("build/%s_libs", lib->name);
     char *shared_lib_command =
         string_stream("clang -shared -o build/lib%s.so ", lib->name);
@@ -904,6 +964,7 @@ Builder *init_builder() {
     builder->generate_library = __generate_library__impl;
     builder->link_library = __elink_libraries__impl;
     builder->add_system_library = __add_system_library_impl;
+    builder->add_source = __add_source_impl;
     builder->add_executable = __add_executable__impl;
     builder->arch = X86;
     builder->compiler = CLANG;
@@ -915,7 +976,7 @@ Builder *init_builder() {
 }
 
 void __add_system_library_impl(Builder *self, const char *name){
-    char *lib_comm = string_stream(" -l%s", name);
+    char *lib_comm = string_stream(" -l%s ", name);
     int new_size = strlen(self->command) + strlen(lib_comm) + 2;
     self->command = realloc(self->command, new_size);
     strcat(self->command, lib_comm);
@@ -929,7 +990,7 @@ void __add_executable__impl(Builder *self, Executable *exe) {
 }
 
 void __elink_libraries__impl(Builder *self, Library *library) {
-    char *lib_path = string_stream("build/lib%s.so", library->name);
+    char *lib_path = string_stream(" build/lib%s.so ", library->name);
     int new_size = strlen(self->command) + strlen(lib_path) + 2;
     self->command = realloc(self->command, new_size);
     strcat(self->command, lib_path);
