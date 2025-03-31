@@ -51,6 +51,7 @@ These are the long-term goals of this build system. If you’d like to contribut
 - [x] Generating shared libraries from source (.c) and header (.h) files
 - [x] Linking shared libraries
 - [ ] Support for GCC and other compilers
+- [ ] Compiler Optimizations
 - [ ] Portability(Windows, Mac)
 - [ ] Dependency management
 - [ ] Parallel compilation
