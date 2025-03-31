@@ -1,4 +1,6 @@
 # Ember
+![Ember](images/ember.png)
+
 A simple, header-only build system for C, written in C.
 
 🚧 Work in Progress: Currently, Ember only supports the Clang compiler on Linux. Stay tuned for further updates.
@@ -56,3 +58,7 @@ These are the long-term goals of this build system. If you’d like to contribut
 - [ ] Dependency management
 - [ ] Parallel compilation
 - [ ] External packages from network
+- [ ] Emitting Assembly directly
+- [ ] Emitting LLVM IR
+- [ ] Emitting Assembly for different archs
+
