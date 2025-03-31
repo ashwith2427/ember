@@ -975,6 +975,16 @@ Builder *init_builder() {
     return builder;
 }
 
+void __add_source_impl(Builder *self, const char *path){
+    FILE* file = fopen(path, "r");
+    if(!file){
+        PRINT_ERROR("No source found.");
+    }
+    int new_size = strlen(self->command) + strlen(path) + 2;
+    self->command = realloc(self->command, new_size);
+    strcat(self->command, path);
+}
+
 void __add_system_library_impl(Builder *self, const char *name){
     char *lib_comm = string_stream(" -l%s ", name);
     int new_size = strlen(self->command) + strlen(lib_comm) + 2;
